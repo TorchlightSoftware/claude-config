@@ -1,0 +1,320 @@
+#!/usr/bin/env bash
+# agenda: reads and writes the agenda stack of the project the working directory is in.
+#
+# An agenda is a markdown file: a title, the date it was created, its goal (where
+# the discussion is trying to get to) and a summary, then numbered topics. Each
+# topic has a status, whether it's on the critical path to the goal, the topics
+# it depends on, and items of Context, Agreed and Open Questions.
+# The stack lives beside the project's memory, in
+# ~/.claude/projects/<project>/agendas/<n>-<slug>.md; the highest n is the
+# current agenda. A write goes to a copy, which must lint before it replaces
+# the agenda. AGENDA_TODAY is the date a new agenda is created on (today).
+set -euo pipefail
+shopt -s extglob
+
+# ripgrep reads agendas the same way everywhere: without a person's config, and without coloring its matches in a terminal.
+rg() { command rg --no-config --color never "$@"; }
+
+# The width of the terminal a person reads the output in, or nothing when it isn't one: read before the output is piped to glow.
+[[ -t 1 ]] && TERMINAL_WIDTH=$(tput cols) || TERMINAL_WIDTH=
+
+STATUSES='open|will plan|planned|dropped|will implement|implemented'
+
+# A topic's section heading, by the name a write gives it; nothing for a name that isn't a section.
+# (case lookups rather than associative arrays, so the script runs on bash 3.2, the bash macOS ships.)
+heading() { case $1 in context) echo 'Context' ;; agreed) echo 'Agreed' ;; questions) echo 'Open Questions' ;; esac; }
+
+# The prefix of the topic line a write replaces, by the name the write gives it.
+field() { case $1 in status) echo 'Status: ' ;; critical) echo 'Critical path: ' ;; depends) echo 'Depends on: ' ;; esac; }
+
+# Each status, marked with its color; a topic on the critical path, checked.
+MARKS='s/\| (open) \|/| 🟡 \1 |/; s/\| (will plan|will implement) \|/| 🔵 \1 |/; s/\| (planned|implemented) \|/| 🟢 \1 |/; s/\| (dropped) \|/| 🔴 \1 |/; s/\| yes \|/| ✓ |/; s/\| no \|/|  |/'
+
+# The project, as Claude Code keys its memory: the git repository the working directory is in,
+# one for all its subdirectories and worktrees; outside a repository, the working directory.
+project() {
+  local common
+  common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { echo "$PWD"; return; }
+  dirname "$common"
+}
+
+# The project's agendas: under its path, with every character but letters and digits a dash.
+AGENDAS=$HOME/.claude/projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$(project)")/agendas
+
+fail() { echo "$*" >&2; exit 1; }
+
+# The agendas in the stack, newest first.
+stack() { ls "$AGENDAS" 2>/dev/null | { rg '^\d+-.+\.md$' || true; } | sort -rn | sed "s|^|$AGENDAS/|"; }
+current() { stack | head -1; }
+need_current() { local f; f=$(current); [[ -n $f ]] || fail "No agendas in $AGENDAS."; echo "$f"; }
+
+number() { basename "$1" | rg -o '^\d+'; }
+title() { sed -n '1s/^# //p' "$1"; }
+goal() { sed -n '4s/^Goal: //p' "$1"; }
+summary_of() { sed -n 5p "$1"; }
+open_count() { rg -c '^Status: open$' "$1" || echo 0; }
+
+# How many topics on the critical path are decided (any status but open), of how many there are.
+critical_path() {
+  local all undecided
+  all=$(rg -c '^Critical path: yes$' "$1" || echo 0)
+  undecided=$(rg -U -o -N '^Status: open\nCritical path: yes$' -r x "$1" | wc -l)
+  echo "$((all - undecided))/$all"
+}
+
+# Index rows of an agenda's topics whose status matches a pattern: | n | ! | status | title |
+rows() { rg -U -N "^## (\d+)\. (.+)\n\nStatus: ($2)\nCritical path: (yes|no)\$" -r '| $1 | $4 | $3 | $2 |' "$1" | sed -E "$MARKS"; }
+table() { local found; found=$(rows "$@") || return 1; printf '| # | ! | Status | Topic |\n|---|---|---|---|\n%s\n' "$found"; }
+
+# Each topic with open questions: its number and title, then its questions.
+questions() { rg -U -P -N '^## (\d+)\. (.+)\n(?:(?!## ).*\n)*?### Open Questions\n((?:- .*\n)+)' -r $'\n**$1. $2**\n$3' "$1"; }
+
+open_questions() {
+  local f; f=$(need_current)
+  printf '### Open questions\n'
+  questions "$f" || printf '\nNone.\n'
+}
+
+# The goal, the critical path and the index; then the open questions, except
+# in a terminal, where a person reads the index at a glance.
+show() {
+  local f; f=$(need_current)
+  printf '## %s\n\n**Goal:** %s\n\n**Critical Path:** %s\n\n' "$(title "$f")" "$(goal "$f")" "$(critical_path "$f")"
+  table "$f" "$STATUSES" || echo 'No topics yet.'
+  [[ -n $TERMINAL_WIDTH ]] || { echo; open_questions; }
+}
+
+topic() { local f; f=$(need_current); rg -U -P -N "(?s)^## $1\. .*?(?=^## |\z)" "$f" || fail "No topic $1."; }
+
+list() {
+  local f
+  stack | while read -r f; do
+    printf -- '- **%s. %s** (%s open; critical path %s): %s\n' "$(number "$f")" "$(title "$f")" "$(open_count "$f")" "$(critical_path "$f")" "$(summary_of "$f")"
+  done
+}
+
+# Where each agenda in the stack lives, newest first, with how many topics it has.
+meta() {
+  local f n
+  [[ -n $(current) ]] || { echo "No agendas in $AGENDAS."; return; }
+  stack | while read -r f; do
+    n=$(rg -c '^## \d+\. ' "$f" || echo 0)
+    printf '%s (%s topic%s)\n' "$f" "$n" "$( ((n == 1)) || echo s)"
+  done
+}
+
+delete() {
+  local deleted; deleted=$(topic "$1" | head -1 | sed 's/^## //')
+  TOPIC=$1 write delete_topic
+  echo "Deleted topic $deleted."
+  echo; show
+}
+
+# Closes the current agenda once no topic is left open, will plan or will
+# implement; otherwise lists those topics and refuses, leaving it as it was.
+close() {
+  local f; f=$(need_current)
+  if table "$f" 'open|will plan|will implement'; then
+    fail 'These topics are open, will plan or will implement, so the agenda stays open. Use force-close to override this warning.'
+  fi
+  force_close
+}
+
+# Closes the current agenda whatever its topics' status: deletes it, then shows the one beneath it.
+force_close() {
+  local f closed; f=$(need_current); closed=$(title "$f")
+  rm "$f"
+  echo "Closed $closed."
+  if [[ -n $(current) ]]; then echo; show; else echo 'No agendas remain.'; fi
+}
+
+# Each problem that would keep an agenda from being read: one per line, none when it parses.
+problems() {
+  local f=$1 all formed
+  rg -q -U -P '\A# .+\n\nCreated: \d{4}-\d{2}-\d{2}\nGoal: .+\n\S.*\n' "$f" || echo 'The header is not a title, a blank line, "Created: <date>", "Goal: <goal>" and a summary.'
+  rg -n -P '^#(?!# \d+\. |## (?:Context|Agreed|Open Questions)$)' "$f" | { rg -v '^1:' || true; } | sed -E 's/^([0-9]+):/Line \1 is a heading outside the template: /'
+  rg -n '^## \d+\. .*\|' "$f" | sed -E 's/^([0-9]+):.*/Line \1: a title holds |, which splits the index table./'
+  all=$(rg -o -N '^## (\d+)\. ' -r '$1' "$f" || true)
+  [[ $all == "$(seq -s $'\n' 1 "$(wc -w <<<"$all")" 2>/dev/null)" ]] || echo "Topics are numbered $(echo $all), not 1 to n in order."
+  formed=$(rg -U -P -o -N "^## (\d+)\. [^|\n]+\n\nStatus: (?:$STATUSES)\nCritical path: (?:yes|no)\nDepends on: .+\n\n### Context\n(?:- .*\n)*\n### Agreed\n(?:- .*\n)*\n### Open Questions\n(?:- .*\n)*(?:\n(?=## )|\z)" -r '$1' "$f" || true)
+  comm -23 <(sort <<<"$all") <(sort <<<"$formed") | { rg . || true; } | sort -n | sed -E "s/(.*)/Topic \1 doesn't follow the template: Status (one of $STATUSES), Critical path (yes or no), Depends on, then Context, Agreed and Open Questions items, blank lines between./"
+}
+
+lint() {
+  local found; found=$(problems "$1")
+  [[ -z $found ]] || { echo "$found" >&2; return 1; }
+}
+
+# Writes an edit of the current agenda: the edit reads the agenda and prints
+# the new one, which lands only when it lints.
+write() {
+  local f copy; f=$(need_current); copy=$(mktemp "$AGENDAS/.edit.XXXXXX")
+  "$@" <"$f" >"$copy" || { rm "$copy"; fail 'Nothing to edit there.'; }
+  lint "$copy" || { rm "$copy"; fail 'The edit would break the agenda, so nothing was written.'; }
+  mv "$copy" "$f"
+}
+
+# Edits one topic, as awk reads it from the environment (OP, TOPIC, PREFIX, HEADING, K, TEXT):
+#   line    replace its line starting with PREFIX by TEXT
+#   add     add item TEXT at the end of its HEADING section
+#   set     replace item K of its HEADING section by TEXT
+#   remove  remove item K of its HEADING section
+# It fails when there's nothing to edit.
+edit_topic() {
+  awk '
+    BEGIN { op = ENVIRON["OP"]; topic = ENVIRON["TOPIC"] + 0; prefix = ENVIRON["PREFIX"]; heading = ENVIRON["HEADING"]; k = ENVIRON["K"] + 0; text = ENVIRON["TEXT"] }
+    # Blank lines in the edited section wait, so an added item lands after its last item.
+    function release() { for (; blanks; blanks--) print "" }
+    function leave() { if (here && op == "add") { print "- " text; done = 1 }; release(); here = 0 }
+    /^## [0-9]+\. / { leave(); current = $2 + 0 }
+    /^### / { leave(); here = current == topic && substr($0, 5) == heading; item = 0 }
+    here && /^$/ { blanks++; next }
+    here && /^- / { release(); if (++item == k && op != "add") { done = 1; if (op == "set") print "- " text; next } }
+    op == "line" && current == topic && index($0, prefix) == 1 { print text; done = 1; next }
+    { release(); print }
+    END { leave(); exit done ? 0 : 1 }
+  '
+}
+
+# Deletes topic TOPIC, as awk reads it from the environment: the topics after it
+# move up one number, and every Depends on list drops it and follows the move.
+delete_topic() {
+  awk '
+    BEGIN { topic = ENVIRON["TOPIC"] + 0 }
+    # Blank lines wait, so those before the deleted topic stay with the topic after it, or go when it was the last.
+    function release() { for (; blanks; blanks--) print "" }
+    function renumber(n) { return n > topic ? n - 1 : n }
+    /^## [0-9]+\. / {
+      n = $2 + 0
+      if (n == topic) { skipping = 1; done = 1; next }
+      skipping = 0; release()
+      sub(/^## [0-9]+\./, "## " renumber(n) "."); print; next
+    }
+    skipping { next }
+    /^$/ { blanks++; next }
+    /^Depends on: / {
+      release()
+      count = split(substr($0, 13), deps, / *, */); kept = ""
+      for (i = 1; i <= count; i++) {
+        if (deps[i] ~ /^[0-9]+$/ && deps[i] + 0 == topic) continue
+        kept = kept (kept == "" ? "" : ",") (deps[i] ~ /^[0-9]+$/ ? renumber(deps[i] + 0) : deps[i])
+      }
+      print "Depends on: " (kept == "" ? "none" : kept); next
+    }
+    { release(); print }
+    END { if (!skipping) release(); exit done ? 0 : 1 }
+  '
+}
+
+add_topic() { cat; printf '\n## %d. %s\n\nStatus: open\nCritical path: %s\nDepends on: none\n\n### Context\n\n### Agreed\n\n### Open Questions\n' "$1" "$2" "$3"; }
+
+# Replaces a line of the agenda's header, by its number.
+set_header_line() { LINE=$1 TEXT=$2 awk 'NR == ENVIRON["LINE"] { print ENVIRON["TEXT"]; next } 1'; }
+
+new() {
+  local slug=$1 title=$2 goal=$3 summary=$4 n
+  [[ $slug =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || fail "A slug is lowercase words joined by dashes, not '$slug'."
+  n=$(( $(number "$(current)" 2>/dev/null || echo 0) + 1 ))
+  mkdir -p "$AGENDAS"
+  printf '# %s\n\nCreated: %s\nGoal: %s\n%s\n' "$title" "${AGENDA_TODAY:-$(date +%F)}" "$goal" "$summary" >"$AGENDAS/.new"
+  lint "$AGENDAS/.new" || { rm "$AGENDAS/.new"; fail 'The agenda would not parse, so nothing was written.'; }
+  mv "$AGENDAS/.new" "$AGENDAS/$n-$slug.md"
+  echo "Created $n-$slug.md."
+}
+
+help() {
+  cat <<'EOF'
+## agenda
+
+Run it anywhere in the project: in a git repository, from any subdirectory or worktree; outside one, from the project's directory. With no command, it shows the index.
+
+### Reading
+
+| Command | What it prints |
+|---|---|
+| `show` | the goal, critical path and index, then the open questions (not in a terminal) |
+| `<n>` | topic n, whole |
+| `questions` | each topic's open questions, under its number and title |
+| `list` | every agenda in the stack, newest first, with its open count, critical path and summary |
+| `meta` | the file of every agenda in the stack, newest first, with its topic count |
+| `lint` | whether the agenda parses |
+| `update` | lints the agenda, then shows it |
+| `help` | this help |
+
+### Writing
+
+Text goes in single quotes; items are numbered from 1; each write must lint before it lands.
+
+| Command | What it does |
+|---|---|
+| `new <slug> <title> <goal> <summary>` | pushes a new agenda |
+| `add-topic <title> yes\|no` | adds a topic, open, to the end; yes puts it on the critical path |
+| `status <n> <status>` | sets topic n's status: open, will plan, planned, dropped, will implement or implemented |
+| `critical <n> yes\|no` | puts topic n on the critical path, or takes it off |
+| `depends <n> <topics>` | the topics topic n depends on, or none |
+| `retitle <n> <title>` | renames topic n |
+| `<n> delete` | deletes topic n; the topics after it move up one number, and Depends on lists follow |
+| `add <n> context\|agreed\|questions <text>` | adds an item at the end of a section |
+| `set <n> context\|agreed\|questions <k> <text>` | replaces item k of a section |
+| `remove <n> context\|agreed\|questions <k>` | removes item k of a section |
+| `goal <text>` | replaces the agenda's goal |
+| `summary <text>` | replaces the agenda's summary |
+| `close` | deletes the current agenda, then shows the one beneath it; refused, listing them, while any topic is open, will plan or will implement |
+| `force-close` | deletes the current agenda whatever its topics' status, then shows the one beneath it |
+EOF
+}
+
+# A command's row of the help, when it was given the wrong arguments: its syntax, with the table's escaped bars unescaped.
+usage() { fail "Usage: agenda $(help | rg -o -N "^\| \`($1(?: [^\`]*)?)\` \|" -r '$1' | sed 's/\\|/|/g')"; }
+section() { [[ -n $(heading "$1") ]] || fail "A section is context, agreed or questions, not '$1'."; }
+
+main() {
+  case ${1:-show} in
+    +([0-9]))
+      case ${2-} in
+        '') topic "$1" ;;
+        delete) (($# == 2)) || usage '<n> delete'; delete "$1" ;;
+        *) usage '<n> delete' ;;
+      esac ;;
+    list) list ;;
+    meta) meta ;;
+    questions) open_questions ;;
+    help) help ;;
+    update) f=$(need_current); lint "$f"; show ;;
+    close) close ;;
+    force-close) force_close ;;
+    lint) f=$(need_current); lint "$f" && echo 'The agenda parses.' ;;
+    new)
+      (($# == 5)) || usage new
+      new "$2" "$3" "$4" "$5" ;;
+    add-topic)
+      (($# == 3)) || usage add-topic
+      f=$(need_current); n=$(( $(rg -c '^## \d+\. ' "$f" || echo 0) + 1 ))
+      write add_topic "$n" "$2" "$3"; topic "$n" ;;
+    status|critical|depends)
+      (($# == 3)) || usage "$1"
+      OP=line TOPIC=$2 PREFIX=$(field "$1") TEXT=$(field "$1")$3 write edit_topic; topic "$2" ;;
+    retitle)
+      (($# == 3)) || usage retitle
+      OP=line TOPIC=$2 PREFIX="## $2. " TEXT="## $2. $3" write edit_topic; topic "$2" ;;
+    add)
+      (($# == 4)) || usage add
+      section "$3"; OP=add TOPIC=$2 HEADING=$(heading "$3") TEXT=$4 write edit_topic; topic "$2" ;;
+    set)
+      (($# == 5)) || usage set
+      section "$3"; OP=set TOPIC=$2 HEADING=$(heading "$3") K=$4 TEXT=$5 write edit_topic; topic "$2" ;;
+    remove)
+      (($# == 4)) || usage remove
+      section "$3"; OP=remove TOPIC=$2 HEADING=$(heading "$3") K=$4 write edit_topic; topic "$2" ;;
+    goal)
+      (($# == 2)) || usage goal
+      write set_header_line 4 "Goal: $2"; head -5 "$(need_current)" ;;
+    summary)
+      (($# == 2)) || usage summary
+      write set_header_line 5 "$2"; head -5 "$(need_current)" ;;
+    *) show ;;
+  esac
+}
+
+# In a terminal, glow renders the markdown when it's installed, at the terminal's width rather than its configured one.
+if [[ -n $TERMINAL_WIDTH ]] && command -v glow >/dev/null; then main "$@" | glow -w "$TERMINAL_WIDTH" -; else main "$@"; fi

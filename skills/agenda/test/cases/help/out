@@ -1,0 +1,37 @@
+## agenda
+
+Run it anywhere in the project: in a git repository, from any subdirectory or worktree; outside one, from the project's directory. With no command, it shows the index.
+
+### Reading
+
+| Command | What it prints |
+|---|---|
+| `show` | the goal, critical path and index, then the open questions (not in a terminal) |
+| `<n>` | topic n, whole |
+| `questions` | each topic's open questions, under its number and title |
+| `list` | every agenda in the stack, newest first, with its open count, critical path and summary |
+| `meta` | the file of every agenda in the stack, newest first, with its topic count |
+| `lint` | whether the agenda parses |
+| `update` | lints the agenda, then shows it |
+| `help` | this help |
+
+### Writing
+
+Text goes in single quotes; items are numbered from 1; each write must lint before it lands.
+
+| Command | What it does |
+|---|---|
+| `new <slug> <title> <goal> <summary>` | pushes a new agenda |
+| `add-topic <title> yes\|no` | adds a topic, open, to the end; yes puts it on the critical path |
+| `status <n> <status>` | sets topic n's status: open, will plan, planned, dropped, will implement or implemented |
+| `critical <n> yes\|no` | puts topic n on the critical path, or takes it off |
+| `depends <n> <topics>` | the topics topic n depends on, or none |
+| `retitle <n> <title>` | renames topic n |
+| `<n> delete` | deletes topic n; the topics after it move up one number, and Depends on lists follow |
+| `add <n> context\|agreed\|questions <text>` | adds an item at the end of a section |
+| `set <n> context\|agreed\|questions <k> <text>` | replaces item k of a section |
+| `remove <n> context\|agreed\|questions <k>` | removes item k of a section |
+| `goal <text>` | replaces the agenda's goal |
+| `summary <text>` | replaces the agenda's summary |
+| `close` | deletes the current agenda, then shows the one beneath it; refused, listing them, while any topic is open, will plan or will implement |
+| `force-close` | deletes the current agenda whatever its topics' status, then shows the one beneath it |

@@ -1,0 +1,6 @@
+| # | ! | Status | Topic |
+|---|---|---|---|
+| 1 | ✓ | 🟡 open | The first topic |
+| 2 | ✓ | 🔵 will implement | The second topic |
+These topics are open, will plan or will implement, so the agenda stays open. Use force-close to override this warning.
+(exit 1)

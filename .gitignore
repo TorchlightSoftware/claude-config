@@ -1,0 +1,5 @@
+# Per-user files live in ~/.claude, copied from the *.example files; never commit your own.
+CLAUDE.md
+personal.md
+tools.local.md
+settings.json

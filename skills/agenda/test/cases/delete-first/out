@@ -1,0 +1,17 @@
+Deleted topic 1. The first topic.
+
+## Alpha plans
+
+**Goal:** Get alpha ready to build.
+
+**Critical Path:** 1/1
+
+| # | ! | Status | Topic |
+|---|---|---|---|
+| 1 | ✓ | 🔵 will implement | The second topic |
+| 2 |  | 🔴 dropped | The third topic |
+
+### Open questions
+
+**2. The third topic**
+- Why drop it?

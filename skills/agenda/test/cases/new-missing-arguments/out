@@ -1,0 +1,2 @@
+Usage: agenda new <slug> <title> <goal> <summary>
+(exit 1)

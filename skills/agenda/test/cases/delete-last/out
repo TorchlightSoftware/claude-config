@@ -1,0 +1,18 @@
+Deleted topic 3. The third topic.
+
+## Alpha plans
+
+**Goal:** Get alpha ready to build.
+
+**Critical Path:** 1/2
+
+| # | ! | Status | Topic |
+|---|---|---|---|
+| 1 | ✓ | 🟡 open | The first topic |
+| 2 | ✓ | 🔵 will implement | The second topic |
+
+### Open questions
+
+**1. The first topic**
+- Is it so?
+- Or not?

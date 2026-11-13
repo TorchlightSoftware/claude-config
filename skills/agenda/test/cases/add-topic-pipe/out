@@ -1,0 +1,4 @@
+Line 50: a title holds |, which splits the index table.
+Topic 4 doesn't follow the template: Status (one of open|will plan|planned|dropped|will implement|implemented), Critical path (yes or no), Depends on, then Context, Agreed and Open Questions items, blank lines between.
+The edit would break the agenda, so nothing was written.
+(exit 1)

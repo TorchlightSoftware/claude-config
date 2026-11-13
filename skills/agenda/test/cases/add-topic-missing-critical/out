@@ -1,0 +1,2 @@
+Usage: agenda add-topic <title> yes|no
+(exit 1)

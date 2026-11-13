@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Runs every case in test/cases/<name>/, each in a project and home of its own:
+#   args    agenda's arguments, one per line
+#   tty     present: agenda runs in a pseudo-terminal 100 columns wide, as in a person's shell
+#   stack   the fixtures the stack starts with, one per line (none: empty)
+#   out     what agenda prints, stdout and stderr; "(exit n)" ends it when it fails
+#   after/  the stack it leaves (none: as it started)
+#   repo      present: the project is a git repository, with one commit
+#   worktree  present: the repository has a worktree beside the project, at ../my.tree
+#   cwd       the directory agenda runs in, relative to the project (none: the project)
+# test/bin comes first on PATH, so glow is its stand-in. The agendas' directory
+# shows as <agendas> in out. With --record, each case's
+# out and after/ are rewritten from what agenda does, for review.
+set -uo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+record=${1:-}
+failed=0
+
+# The git repository a case asks its project to be, and its worktree, made without a person's git config.
+make_repo() {
+  local case=$1 project=$2
+  local git=(env HOME="$tmp/home" GIT_CONFIG_NOSYSTEM=1 git -C "$project" -c init.defaultBranch=main -c user.name=agenda -c user.email=agenda@example.com)
+  [[ -f $case/repo ]] || return 0
+  "${git[@]}" init -q && "${git[@]}" commit -q --allow-empty -m start
+  if [[ -f $case/worktree ]]; then "${git[@]}" worktree add -q ../my.tree; fi
+}
+
+for case in "$here"/cases/*/; do
+  name=$(basename "$case")
+  tmp=$(mktemp -d)
+  project=$tmp/work/my.project
+  agendas=$tmp/home/.claude/projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$project")/agendas
+  mkdir -p "$project" "$agendas" "$tmp/before"
+  make_repo "$case" "$project" >/dev/null 2>&1
+  cwd=$project; [[ -f $case/cwd ]] && cwd=$project/$(<"$case/cwd")
+  mkdir -p "$cwd"
+  [[ -f $case/stack ]] && while read -r fixture; do cp "$here/fixtures/$fixture" "$tmp/before/"; done <"$case/stack"
+  cp -r "$tmp/before/." "$agendas"
+  mapfile -t args <"$case/args"
+  run=("$here/../agenda" "${args[@]}")
+  [[ -f $case/tty ]] && run=(script -qec "stty cols 100 rows 40; $(printf '%q ' "${run[@]}")" /dev/null)
+
+  out=$(cd "$cwd" && HOME=$tmp/home PATH=$here/bin:$PATH AGENDA_TODAY=2026-01-01 "${run[@]}" 2>&1 | tr -d '\r')
+  status=$?
+  ((status)) && out+=$'\n'"(exit $status)"
+  out=${out//$agendas/<agendas>}
+
+  if [[ $record == --record ]]; then
+    echo "$out" >"$case/out"
+    rm -rf "$case/after"
+    diff -rq "$tmp/before" "$agendas" >/dev/null || { mkdir "$case/after"; cp -r "$agendas/." "$case/after"; }
+  fi
+
+  after=$case/after; [[ -d $after ]] || after=$tmp/before
+  if diff -u "$case/out" <(echo "$out") && diff -ru "$after" "$agendas"; then
+    echo "ok $name"
+  else
+    echo "FAILED $name"; failed=1
+  fi
+  rm -rf "$tmp"
+done
+
+exit $failed

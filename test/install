@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Runs install.sh against a fresh home of its own for each case, then checks the config directory it leaves.
+# A case is a function named case_<name>: it arranges the home, runs install, and asserts.
+set -uo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(dirname "$here")
+failed=0
+
+# The shared paths install.sh links, and the per-user files it copies once from their examples.
+SHARED=(standards.md commands.md tools.md skills/agenda commands/commit.md commands/discuss.md commands/plan.md commands/refactor.md commands/task.md)
+PER_USER=(CLAUDE.md:CLAUDE.example.md personal.md:personal.example.md tools.local.md:tools.local.example.md settings.json:settings.example.json)
+
+install() { HOME=$home "$repo/install.sh" "$@" 2>&1; }
+expect() { "$@" || { echo "  expected: $*"; return 1; }; }
+linked_to_repo() { [[ -L $1 && $(readlink "$1") == "$repo/$2" ]]; }
+same_file() { cmp -s "$1" "$2"; }
+has_text() { [[ $(<"$1") == "$2" ]]; }
+no_backup() { [[ ! -e $home/.claude.moved ]]; }
+backup_of() { find "$home/.claude.moved" -path "*/$1" -print -quit 2>/dev/null; }
+
+all_shared_linked() { local p; for p in "${SHARED[@]}"; do expect linked_to_repo "$home/.claude/$p" "$p" || return 1; done; }
+all_per_user_from_examples() { local pair; for pair in "${PER_USER[@]}"; do expect same_file "$home/.claude/${pair%%:*}" "$repo/${pair##*:}" || return 1; done; }
+
+case_fresh_home_links_shared_and_copies_per_user() {
+  install >/dev/null
+  all_shared_linked && all_per_user_from_examples && expect no_backup
+}
+
+case_existing_shared_files_move_to_a_backup() {
+  mkdir -p "$home/.claude/commands" "$home/.claude/skills/agenda"
+  echo old tools >"$home/.claude/tools.md"
+  echo old discuss >"$home/.claude/commands/discuss.md"
+  echo old skill >"$home/.claude/skills/agenda/SKILL.md"
+  install >/dev/null
+  all_shared_linked &&
+    expect has_text "$(backup_of tools.md)" 'old tools' &&
+    expect has_text "$(backup_of commands/discuss.md)" 'old discuss' &&
+    expect has_text "$(backup_of skills/agenda/SKILL.md)" 'old skill'
+}
+
+case_symlink_elsewhere_moves_to_a_backup() {
+  mkdir -p "$home/.claude"; ln -s /nonexistent "$home/.claude/standards.md"
+  install >/dev/null
+  expect linked_to_repo "$home/.claude/standards.md" standards.md && expect test -L "$(backup_of standards.md)"
+}
+
+case_existing_per_user_files_are_kept_and_named() {
+  mkdir -p "$home/.claude"; echo mine >"$home/.claude/CLAUDE.md"
+  local out; out=$(install)
+  expect has_text "$home/.claude/CLAUDE.md" mine && expect grep -q 'CLAUDE.example.md' <<<"$out"
+}
+
+case_second_run_changes_nothing() {
+  install >/dev/null; rm -rf "$home/.claude.moved"
+  local out; out=$(install)
+  all_shared_linked && expect no_backup && expect test -z "$(grep -E '^(moved|linked|created) ' <<<"$out")"
+}
+
+case_other_commands_and_skills_are_left_alone() {
+  mkdir -p "$home/.claude/commands" "$home/.claude/skills/mine"
+  echo my command >"$home/.claude/commands/mine.md"; echo my skill >"$home/.claude/skills/mine/SKILL.md"
+  install >/dev/null
+  expect has_text "$home/.claude/commands/mine.md" 'my command' && expect has_text "$home/.claude/skills/mine/SKILL.md" 'my skill'
+}
+
+case_claude_config_dir_is_honored() {
+  CLAUDE_CONFIG_DIR=$home/elsewhere install >/dev/null
+  expect linked_to_repo "$home/elsewhere/tools.md" tools.md && expect test ! -e "$home/.claude"
+}
+
+case_missing_rg_warns_but_installs() {
+  local bin=$home/bin tool out; mkdir -p "$bin"
+  for tool in bash env dirname date mkdir mv ln cp readlink uname; do ln -s "$(command -v $tool)" "$bin/$tool"; done
+  out=$(PATH=$bin install)
+  expect grep -q 'rg' <<<"$out" && all_shared_linked
+}
+
+for name in $(declare -F | awk '{print $3}' | grep '^case_'); do
+  home=$(mktemp -d)
+  if out=$($name 2>&1); then echo "ok ${name#case_}"; else echo "FAIL ${name#case_}"; echo "$out"; failed=1; fi
+  rm -rf "$home"
+done
+exit $failed

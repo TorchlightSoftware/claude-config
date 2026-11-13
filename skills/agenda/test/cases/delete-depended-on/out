@@ -1,0 +1,18 @@
+Deleted topic 2. Walls.
+
+## Dependencies
+
+**Goal:** Untangle the topics.
+
+**Critical Path:** 0/2
+
+| # | ! | Status | Topic |
+|---|---|---|---|
+| 1 | ✓ | 🟡 open | Ground |
+| 2 | ✓ | 🟡 open | Roof |
+| 3 |  | 🟡 open | Paint |
+
+### Open questions
+
+**3. Paint**
+- Which color?

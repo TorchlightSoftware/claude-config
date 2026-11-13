@@ -1,0 +1,16 @@
+{
+  "model": "opus",
+  "alwaysThinkingEnabled": true,
+  "tui": "fullscreen",
+  "editorMode": "vim",
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    }
+  },
+  "permissions": {
+    "allow": [
+      "WebSearch"
+    ]
+  }
+}

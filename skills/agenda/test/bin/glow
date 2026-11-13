@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stands in for glow in the tests: shows how agenda called glow, then the markdown it piped in.
+echo "(rendered by glow $*)"
+cat

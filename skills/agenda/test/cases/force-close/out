@@ -1,0 +1,22 @@
+Closed Beta.
+
+## Alpha plans
+
+**Goal:** Get alpha ready to build.
+
+**Critical Path:** 1/2
+
+| # | ! | Status | Topic |
+|---|---|---|---|
+| 1 | ✓ | 🟡 open | The first topic |
+| 2 | ✓ | 🔵 will implement | The second topic |
+| 3 |  | 🔴 dropped | The third topic |
+
+### Open questions
+
+**1. The first topic**
+- Is it so?
+- Or not?
+
+**3. The third topic**
+- Why drop it?
